@@ -14,7 +14,7 @@ from groq import Groq
 from pypdf import PdfReader
 import requests
 import streamlit as st
-
+<meta name="google-adsense-account" content="ca-pub-9891132261459814">
 
 # ============================================================
 # UNROTTEN — SEC AUDIT INTELLIGENCE
