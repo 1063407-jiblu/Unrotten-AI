@@ -35,14 +35,12 @@ st.set_page_config(
 # HTTPS domain — it will not show ads on localhost, and some
 # ad blockers or Streamlit's sandboxing may still prevent it from
 # rendering. Injected via unsafe HTML since Streamlit has no <head>.
+
 st.markdown(
-    """
-    <meta name="google-adsense-account" content="ca-pub-9891132261459814">
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9891132261459814"
-     crossorigin="anonymous"></script>
-    """,
+    '<meta name="google-adsense-account" content="ca-pub-9891132261459814">',
     unsafe_allow_html=True,
 )
+
 
 
 # ============================================================
