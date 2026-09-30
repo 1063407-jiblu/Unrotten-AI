@@ -37,6 +37,7 @@ st.set_page_config(
 # rendering. Injected via unsafe HTML since Streamlit has no <head>.
 st.markdown(
     """
+    <meta name="google-adsense-account" content="ca-pub-9891132261459814">
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9891132261459814"
      crossorigin="anonymous"></script>
     """,
