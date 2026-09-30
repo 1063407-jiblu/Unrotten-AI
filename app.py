@@ -14,7 +14,7 @@ from groq import Groq
 from pypdf import PdfReader
 import requests
 import streamlit as st
-<meta name="google-adsense-account" content="ca-pub-9891132261459814">
+
 
 # ============================================================
 # UNROTTEN — SEC AUDIT INTELLIGENCE
@@ -3221,3 +3221,5 @@ architecture, assignment, outcomes, or intended impact.
         '<div style="text-align:center; margin-top:32px; opacity:.55; font-size:.72rem;">Unrotten · SEC-grounded research workspace</div>',
         unsafe_allow_html=True,
     )
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9891132261459814"
+     crossorigin="anonymous"></script>
