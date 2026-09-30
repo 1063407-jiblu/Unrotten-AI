@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import os
 import re
 import textwrap
@@ -13,7 +14,6 @@ from groq import Groq
 from pypdf import PdfReader
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 # ============================================================
@@ -30,14 +30,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Inject Google AdSense Script
-components.html(
+# Google AdSense loader script.
+# NOTE: this only serves live ads on a deployed, AdSense-verified
+# HTTPS domain — it will not show ads on localhost, and some
+# ad blockers or Streamlit's sandboxing may still prevent it from
+# rendering. Injected via unsafe HTML since Streamlit has no <head>.
+st.markdown(
     """
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9891132261459814"
-            crossorigin="anonymous"></script>
+     crossorigin="anonymous"></script>
     """,
-    height=0,
-    width=0,
+    unsafe_allow_html=True,
 )
 
 
@@ -52,13 +55,50 @@ CHROMA_DIR = BASE_DIR / "chroma_db"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 
+HISTORY_FILE = DATA_DIR / "saved_chats.json"
+
+
+def load_saved_chats() -> dict:
+    if not HISTORY_FILE.exists():
+        return {"chat_histories": {}, "conversation_states": {}}
+
+    try:
+        raw = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+        return {
+            "chat_histories": raw.get("chat_histories", {}) or {},
+            "conversation_states": raw.get("conversation_states", {}) or {},
+        }
+    except Exception:
+        return {"chat_histories": {}, "conversation_states": {}}
+
+
+def persist_chats() -> None:
+    try:
+        HISTORY_FILE.write_text(
+            json.dumps(
+                {
+                    "chat_histories": st.session_state.get(
+                        "chat_histories", {}
+                    ),
+                    "conversation_states": st.session_state.get(
+                        "conversation_states", {}
+                    ),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
 
 # ============================================================
 # SESSION STATE
 # ============================================================
 
 DEFAULTS = {
-    "theme_mode": "System",
+    "theme_mode": "Dark",
     "source_type": "Chat without a document",
     "session_id": uuid.uuid4().hex[:8],
     "chat_histories": {},
@@ -68,6 +108,14 @@ DEFAULTS = {
 for key, default in DEFAULTS.items():
     if key not in st.session_state:
         st.session_state[key] = default
+
+if "history_loaded" not in st.session_state:
+    _saved = load_saved_chats()
+    st.session_state["chat_histories"].update(_saved["chat_histories"])
+    st.session_state["conversation_states"].update(
+        _saved["conversation_states"]
+    )
+    st.session_state["history_loaded"] = True
 
 
 # ============================================================
@@ -168,13 +216,74 @@ html, body, [class*="css"] {
     min-height: 100vh;
 }
 
+/* ---- Workspace layout: narrow centered chat column, like a
+   ChatGPT / Claude / Gemini main pane ---- */
 .main .block-container {
-    max-width: 1450px;
-    padding: 26px 32px 60px !important;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 18px 16px 140px !important;
 }
 
+/* Sidebar reads as a workspace nav rail, not a settings panel */
 section[data-testid="stSidebar"] > div {
-    padding: 18px 15px 24px !important;
+    padding: 16px 12px 24px !important;
+}
+
+section[data-testid="stSidebar"] .stRadio > label,
+section[data-testid="stSidebar"] h3 {
+    font-size: .74rem !important;
+    font-weight: 800 !important;
+    letter-spacing: .07em !important;
+    text-transform: uppercase !important;
+    opacity: .6;
+}
+
+section[data-testid="stSidebar"] [role="radiogroup"] label {
+    border-radius: 10px !important;
+    padding: 8px 10px !important;
+    margin-bottom: 2px !important;
+    transition: background .12s ease;
+}
+
+section[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+    background: rgba(127,127,127,.10) !important;
+}
+
+/* Chat messages: no card, no border — full-width rows like a
+   real chat workspace, distinguished by role instead of a box */
+[data-testid="stChatMessage"] {
+    border-radius: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    padding: 4px 0 !important;
+    margin-bottom: 4px !important;
+}
+
+[data-testid="stChatMessage"] [data-testid="chatAvatarIcon-user"],
+[data-testid="stChatMessage"] [data-testid="chatAvatarIcon-assistant"] {
+    display: none !important;
+}
+
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+    display: flex;
+    justify-content: flex-end;
+    margin: 14px 0 6px 0 !important;
+}
+
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) > div:last-child {
+    max-width: 74%;
+    border-radius: 20px !important;
+    padding: 12px 18px !important;
+}
+
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
+    margin: 4px 0 22px 0 !important;
+}
+
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) > div:last-child {
+    max-width: 100%;
+    padding: 2px 2px !important;
 }
 
 .glass-card {
@@ -194,35 +303,35 @@ section[data-testid="stSidebar"] > div {
 }
 
 .hero-title {
-    font-size: clamp(2.7rem, 5vw, 4.2rem);
-    line-height: .88;
-    font-weight: 900;
-    letter-spacing: -.08em;
+    font-size: 1.35rem;
+    line-height: 1.1;
+    font-weight: 800;
+    letter-spacing: -.02em;
 }
 
 .hero-subtitle {
-    margin-top: 10px;
-    font-size: .98rem;
+    margin-top: 1px;
+    font-size: .8rem;
 }
 
 .hero-pill {
     display: inline-block;
-    margin-top: 12px;
-    padding: 7px 12px;
+    margin-top: 4px;
+    padding: 4px 10px;
     border-radius: 999px;
-    font-size: .72rem;
-    font-weight: 750;
+    font-size: .66rem;
+    font-weight: 700;
 }
 
 .logo-main {
-    width: 68px;
-    height: 68px;
+    width: 30px;
+    height: 30px;
     object-fit: contain;
 }
 
 .logo-hero {
-    width: 105px;
-    height: 105px;
+    width: 30px;
+    height: 30px;
     object-fit: contain;
 }
 
@@ -316,12 +425,16 @@ section[data-testid="stSidebar"] > div {
     line-height: 1.68 !important;
 }
 
+/* Floating pill input, pinned to the bottom of the centered
+   column — like ChatGPT / Claude's composer */
 [data-testid="stChatInput"] {
-    border-radius: 22px !important;
+    border-radius: 26px !important;
+    max-width: 820px;
+    margin: 0 auto;
 }
 
 [data-testid="stChatInput"] > div {
-    border-radius: 22px !important;
+    border-radius: 26px !important;
     background: rgba(255,255,255,.86) !important;
     border: 1px solid rgba(120,105,95,.20) !important;
     box-shadow:
@@ -342,9 +455,15 @@ section[data-testid="stSidebar"] > div {
 }
 
 .stButton > button {
-    min-height: 46px !important;
-    border-radius: 15px !important;
-    font-weight: 650 !important;
+    min-height: 40px !important;
+    border-radius: 12px !important;
+    font-weight: 600 !important;
+    font-size: .84rem !important;
+}
+
+/* Sidebar "New chat" primary action */
+section[data-testid="stSidebar"] .stButton > button {
+    border-radius: 10px !important;
 }
 
 .indexing-card {
@@ -550,30 +669,23 @@ section[data-testid="stSidebar"] * {
 DARK_CSS = """
 <style>
 .stApp {
-    background:
-        radial-gradient(circle at 8% 0%, rgba(255,255,255,.04), transparent 28%),
-        radial-gradient(circle at 92% 8%, rgba(179,124,101,.16), transparent 29%),
-        #171514 !important;
-    color: #eee6e1 !important;
+    background: #1a1a1a !important;
+    color: #e9e7e4 !important;
 }
 
 section[data-testid="stSidebar"] {
-    background:
-        linear-gradient(180deg, rgba(31,28,27,.93), rgba(20,18,17,.91))
-        !important;
-    border-right-color: rgba(255,255,255,.09) !important;
+    background: #171717 !important;
+    border-right-color: rgba(255,255,255,.07) !important;
 }
 
 section[data-testid="stSidebar"] * {
-    color: #e6ddd7 !important;
+    color: #d8d5d1 !important;
 }
 
 .glass-card {
-    background: rgba(41,37,35,.62) !important;
-    border-color: rgba(255,255,255,.11) !important;
-    box-shadow:
-        0 20px 55px rgba(0,0,0,.23),
-        inset 0 1px 0 rgba(255,255,255,.06) !important;
+    background: rgba(255,255,255,.04) !important;
+    border-color: rgba(255,255,255,.08) !important;
+    box-shadow: none !important;
 }
 
 .scope-card::before {
@@ -583,7 +695,7 @@ section[data-testid="stSidebar"] * {
 .scope-label,
 .scope-flow,
 .section-subtitle {
-    color: #a69992 !important;
+    color: #97918b !important;
 }
 
 .scope-name,
@@ -592,11 +704,11 @@ section[data-testid="stSidebar"] * {
 }
 
 .hero-title {
-    color: #c3917d;
+    color: #eae6e2;
 }
 
 .hero-subtitle {
-    color: #b3a69f !important;
+    color: #9a938c !important;
 }
 
 .hero-pill {
@@ -605,14 +717,22 @@ section[data-testid="stSidebar"] * {
     border-color: rgba(196,145,125,.16);
 }
 
-[data-testid="stChatMessage"] {
-    background: rgba(43,39,37,.67) !important;
-    border-color: rgba(255,255,255,.10) !important;
+/* User bubble: dark warm gray, right-aligned, like the reference workspace */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) > div:last-child {
+    background: #2e2c2a !important;
+    color: #f2efec !important;
+}
+
+/* Assistant reply: plain flowing text on the app background */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) > div:last-child {
+    background: transparent !important;
+    color: #e9e7e4 !important;
 }
 
 [data-testid="stChatInput"] > div {
-    background: rgba(28,25,24,.94) !important;
-    border: 1px solid rgba(255,255,255,.15) !important;
+    background: #262524 !important;
+    border: 1px solid rgba(255,255,255,.12) !important;
+    box-shadow: none !important;
 }
 
 [data-testid="stChatInput"] textarea {
@@ -622,22 +742,25 @@ section[data-testid="stSidebar"] * {
 }
 
 [data-testid="stChatInput"] textarea::placeholder {
-    color: #a79d96 !important;
+    color: #948d87 !important;
     opacity: 1 !important;
 }
 
 .stButton > button {
-    background: rgba(255,255,255,.055) !important;
+    background: rgba(255,255,255,.05) !important;
     border-color: rgba(255,255,255,.10) !important;
     color: #eee5df !important;
 }
 
+section[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+    background: #2e2c2a !important;
+    border-color: rgba(255,255,255,.14) !important;
+}
+
 .indexing-card {
-    background: rgba(42,38,36,.69);
-    border-color: rgba(255,255,255,.11);
-    box-shadow:
-        0 22px 60px rgba(0,0,0,.25),
-        inset 0 1px 0 rgba(255,255,255,.06);
+    background: rgba(255,255,255,.04);
+    border-color: rgba(255,255,255,.08);
+    box-shadow: none;
 }
 
 .indexing-orbit::before {
@@ -749,11 +872,34 @@ DEMO_COMPANIES = {
 
 with st.sidebar:
 
-    if LOGO_PATH:
-        st.image(
-            str(LOGO_PATH),
-            width=43,
+    brand_logo, brand_name = st.columns(
+        [1, 5],
+        vertical_alignment="center",
+    )
+
+    with brand_logo:
+        if LOGO_PATH:
+            st.image(str(LOGO_PATH), width=26)
+
+    with brand_name:
+        st.markdown(
+            '<div style="font-weight:800; font-size:.95rem; '
+            'letter-spacing:-.02em;">Unrotten</div>',
+            unsafe_allow_html=True,
         )
+
+    if st.button(
+        "＋  New chat",
+        use_container_width=True,
+        type="primary",
+    ):
+
+        st.session_state["chat_histories"]["general"] = []
+        st.session_state["conversation_states"]["general"] = ""
+        persist_chats()
+        st.rerun()
+
+    st.markdown("")
 
     st.markdown("### Document")
 
@@ -849,6 +995,35 @@ with st.sidebar:
 
     st.markdown("---")
 
+    saved_keys = [
+        k for k, v in st.session_state["chat_histories"].items() if v
+    ]
+
+    if saved_keys:
+
+        st.markdown("### Chats")
+
+        for key in saved_keys:
+            count = len(st.session_state["chat_histories"][key])
+            st.markdown(
+                f'<div style="font-size:.82rem; padding:6px 4px; '
+                f'opacity:.85;">💬 {key} '
+                f'<span style="opacity:.5; font-size:.72rem;">'
+                f'({count} msgs)</span></div>',
+                unsafe_allow_html=True,
+            )
+
+        if st.button(
+            "Clear all saved chats",
+            use_container_width=True,
+        ):
+            st.session_state["chat_histories"] = {}
+            st.session_state["conversation_states"] = {}
+            persist_chats()
+            st.rerun()
+
+        st.markdown("---")
+
     st.markdown("### Appearance")
 
     st.radio(
@@ -886,6 +1061,8 @@ with st.sidebar:
         ][
             reset_key
         ] = ""
+
+        persist_chats()
 
         st.rerun()
 
@@ -1616,4 +1793,1307 @@ def update_memory(
 
     existing = get_conversation_state(
         folder_name
+    )
+
+    prompt = f"""
+Maintain compact conversational memory for Unrotten.
+
+Do not write a transcript.
+Do not use outside knowledge.
+Keep the result under 4500 characters.
+
+Store:
+ACTIVE COMPANY / ENTITY
+CURRENT TASK
+REFERENCE LABELS
+USER INTENT / COMPARISONS
+IMPORTANT UNRESOLVED QUESTIONS
+KEY FACTS DISCUSSED (reference only)
+
+EXISTING STATE:
+{existing or "[NONE]"}
+
+USER:
+{question}
+
+ASSISTANT:
+{answer}
+"""
+
+    try:
+
+        response = (
+            client
+            .chat
+            .completions
+            .create(
+                model=GROQ_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content":
+                            "Maintain compact conversational state. "
+                            "Never invent facts.",
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                temperature=0,
+                max_completion_tokens=650,
+            )
+        )
+
+        value = (
+            response
+            .choices[0]
+            .message
+            .content
+            if response.choices
+            else ""
+        )
+
+        value = (
+            value or ""
+        ).strip()
+
+        if value:
+
+            st.session_state[
+                "conversation_states"
+            ][
+                folder_name
+            ] = value[
+                :MAX_MEMORY_CHARS
+            ]
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# DETERMINISTIC PROJECT IDENTITY
+# ============================================================
+
+CREATOR_NAME = "Saai Pranav Balavelayutha Doss Rajesh"
+
+CREATOR_QUESTION_TERMS = (
+    "who made unrotten",
+    "who created unrotten",
+    "who built unrotten",
+    "who developed unrotten",
+    "who made this",
+    "who created this",
+    "who built this",
+    "who developed this",
+    "who is the creator",
+    "who is the developer",
+    "who is behind unrotten",
+    "who made the project",
+    "who created the project",
+    "who built the project",
+    "who developed the project",
+)
+
+def is_creator_question(prompt: str) -> bool:
+    text = re.sub(r"\s+", " ", prompt.lower()).strip()
+    return any(term in text for term in CREATOR_QUESTION_TERMS)
+
+
+# ============================================================
+# PROJECT ROUTER
+# ============================================================
+
+PROJECT_TERMS = (
+    "unrotten",
+    "the project",
+    "our project",
+    "this project",
+    "the application",
+    "the app",
+    "project report",
+    "project proposal",
+    "assignment",
+    "presentation",
+    "documentation",
+    "background",
+    "proposed solution",
+    "outcomes",
+    "impact",
+    "user impact",
+    "what did we create",
+    "what did we build",
+    "what problem does it solve",
+    "what problem are we solving",
+    "what challenge",
+    "challenge are we trying to overcome",
+    "chromadb",
+    "chroma db",
+    "vector database",
+    "vector index",
+    "vector embeddings",
+    "embeddings",
+    "document chunking",
+    "chunking",
+    "context rot",
+    "context-rot",
+    "conversation memory",
+    "conversation state",
+    "retrieval augmented",
+    "rag",
+    "architecture",
+    "groq",
+    "does this meet",
+    "is this all good",
+    "does this satisfy",
+    "what are we supposed to submit",
+    "what am i supposed to do",
+    "how does unrotten work",
+    "how does the app work",
+    "how does the application work",
+)
+
+
+def is_project_question(
+    prompt: str,
+) -> bool:
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        prompt.lower(),
+    ).strip()
+
+    strong_phrases = (
+        "project report",
+        "proposed solution",
+        "what challenge are you trying to overcome",
+        "what impact did it create",
+        "what did we create",
+        "what did we build",
+        "what are we supposed to submit",
+        "what am i supposed to do",
+    )
+
+    if any(
+        phrase in text
+        for phrase in strong_phrases
+    ):
+        return True
+
+    return any(
+        term in text
+        for term in PROJECT_TERMS
+    )
+
+
+# ============================================================
+# QUERY EXPANSION / RETRIEVAL
+# ============================================================
+
+def expand_query(
+    query: str,
+) -> str:
+
+    lower = query.lower()
+    terms = [query]
+
+    if any(
+        x in lower
+        for x in (
+            "address",
+            "office",
+            "agent",
+            "headquarters",
+            "location",
+            "service of process",
+        )
+    ):
+
+        terms.append(
+            "principal executive offices "
+            "registered agent service of process "
+            "corporate headquarters business address"
+        )
+
+    if any(
+        x in lower
+        for x in (
+            "revenue",
+            "sales",
+            "income",
+            "profit",
+            "loss",
+        )
+    ):
+
+        terms.append(
+            "consolidated statements of operations "
+            "net sales total revenues financial results"
+        )
+
+    if any(
+        x in lower
+        for x in (
+            "debt",
+            "maturity",
+            "mature",
+            "bond",
+            "note",
+            "principal",
+            "interest",
+            "loan",
+            "borrowing",
+        )
+    ):
+
+        terms.append(
+            "notes to consolidated financial statements "
+            "senior notes debt obligations principal amount "
+            "maturity date interest rate long-term debt"
+        )
+
+    if any(
+        x in lower
+        for x in (
+            "risk",
+            "legal",
+            "lawsuit",
+            "litigation",
+            "regulatory",
+        )
+    ):
+
+        terms.append(
+            "risk factors legal proceedings litigation "
+            "regulatory matters"
+        )
+
+    if any(
+        x in lower
+        for x in (
+            "segment",
+            "geography",
+            "geographic",
+        )
+    ):
+
+        terms.append(
+            "reportable segments business segments "
+            "geographic information segment revenue"
+        )
+
+    return " ".join(terms)
+
+
+def retrieve(
+    collection_name: str,
+    query: str,
+) -> str:
+
+    try:
+
+        collection = chroma_client.get_collection(
+            name=collection_name,
+            embedding_function=embedding_fn,
+        )
+
+        expanded = expand_query(
+            query
+        )
+
+        results = collection.query(
+            query_texts=[
+                query,
+                expanded,
+            ],
+            n_results=8,
+        )
+
+        documents = results.get(
+            "documents",
+            [],
+        )
+
+        collected = []
+
+        for doc_list in documents:
+
+            if doc_list:
+                collected.extend(doc_list)
+
+        unique = []
+        seen = set()
+
+        for doc in collected:
+
+            if not doc or doc in seen:
+                continue
+
+            seen.add(doc)
+            unique.append(doc)
+
+        # Cover page is particularly valuable for address questions.
+        lower = query.lower()
+
+        address_question = any(
+            x in lower
+            for x in (
+                "address",
+                "office",
+                "agent",
+                "headquarters",
+                "location",
+                "service",
+            )
+        )
+
+        if address_question:
+
+            try:
+
+                cover = collection.get(
+                    ids=["cover_page_meta"]
+                )
+
+                cover_docs = (
+                    cover.get(
+                        "documents",
+                        [],
+                    )
+                    if cover
+                    else []
+                )
+
+                if cover_docs:
+
+                    cover_doc = cover_docs[0]
+
+                    unique = [
+                        cover_doc
+                    ] + [
+                        item
+                        for item in unique
+                        if item != cover_doc
+                    ]
+
+            except Exception:
+                pass
+
+        return "\n\n---\n\n".join(
+            unique[:8]
+        )
+
+    except Exception:
+
+        return ""
+
+
+# ============================================================
+# SYSTEM PROMPTS
+# ============================================================
+
+PROJECT_SYSTEM_PROMPT = """
+You are Unrotten, the assistant for the Unrotten SEC Audit
+Intelligence project.
+
+The user's current question is about the PROJECT / APPLICATION,
+not an SEC filing.
+
+Answer from the application's implemented design and workflow.
+
+Implemented capabilities include:
+- chat without a document
+- pre-loaded SEC 10-K selection
+- custom 10-K PDF upload
+- SEC EDGAR retrieval for supported companies
+- PDF/text extraction
+- overlapping document chunking
+- local ChromaDB vector indexing
+- semantic retrieval
+- Groq-powered answer generation
+- compact conversation memory
+- follow-up reference resolution
+- Source Evidence display
+- Light / Dark / System appearance
+- audit workflow shortcuts
+
+For project-report questions, explain the background/problem,
+proposed solution, architecture, workflow, outcomes, and user
+impact as supported by the implementation.
+
+Do not require SEC filing evidence.
+
+IMPORTANT PROJECT IDENTITY:
+The creator of Unrotten is:
+Saai Pranav Balavelayutha Doss Rajesh
+
+If asked who made, created, built, developed, authored, or is
+responsible for Unrotten, use exactly that name.
+
+Do not invent a team or organization.
+
+
+
+Do not say that the retrieved filing snippets are insufficient
+just because the question is about the project.
+
+Do not invent user counts, measured performance, customer
+adoption, or other metrics that were not actually provided.
+
+Clearly distinguish:
+- implemented functionality
+- intended impact
+- measured outcomes
+
+Use normal Markdown.
+Use headings and tables where helpful.
+Never put the answer in a code block.
+"""
+
+SEC_SYSTEM_PROMPT = """
+You are Unrotten, an institutional SEC financial research analyst.
+
+The user's current question is about the selected SEC filing.
+
+Answer using ONLY the retrieved SEC filing context.
+
+Rules:
+1. Retrieved SEC filing context is authoritative evidence.
+2. Do not invent facts, dates, numbers, entities, financial figures,
+   addresses, or conclusions.
+3. Do not use outside knowledge to fill gaps.
+4. If the retrieved context is insufficient, say:
+
+"The retrieved filing snippets do not contain enough information to answer this."
+
+5. Use normal Markdown.
+6. Use tables when useful.
+7. Distinguish reported facts, calculated values, and interpretation.
+8. If you calculate something, show the calculation briefly and label it calculated.
+9. For debt questions, identify instrument, principal amount, interest rate,
+   maturity date, and relevant terms where available.
+10. Never put the answer inside a code block.
+11. Conversation memory is for resolving references and understanding intent only.
+12. If memory conflicts with SEC evidence, SEC evidence wins.
+"""
+
+
+GENERAL_SYSTEM_PROMPT = """
+You are Unrotten, a helpful general-purpose assistant.
+
+There is currently no document loaded.
+
+You can answer normal questions, explain concepts, help with the
+Unrotten project, help with coding/debugging, and help draft project
+materials.
+
+When the user asks about Unrotten, use the known implemented
+features of the application:
+- Streamlit interface
+- chat without a document
+- SEC filing selection/upload
+- PDF/text extraction
+- ChromaDB vector indexing
+- semantic retrieval
+- Groq analysis
+- compact conversation memory
+- follow-up reference resolution
+- source evidence
+- light/dark/system themes
+
+Do not invent measured project outcomes or statistics.
+
+Use normal Markdown.
+Do not require a PDF.
+Never put the answer in a code block unless the user explicitly
+asks for code.
+"""
+
+
+# ============================================================
+# HEADER
+# ============================================================
+
+hero_left, hero_center = st.columns(
+    [1, 9],
+    vertical_alignment="center",
+)
+
+with hero_left:
+
+    if LOGO_PATH:
+        st.image(
+            str(LOGO_PATH),
+            width=30,
+        )
+
+with hero_center:
+
+    st.markdown(
+        '<div class="hero-title">Unrotten'
+        '<span class="hero-subtitle" style="font-weight:500;">'
+        ' &nbsp;·&nbsp; SEC Audit Intelligence</span></div>',
+        unsafe_allow_html=True,
+    )
+
+st.markdown(
+    '<hr style="margin:10px 0 18px 0; opacity:.15;">',
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# DOCUMENT MODE SETUP
+# ============================================================
+
+collection = None
+active_collection_name = None
+doc_exists = False
+
+if selected_folder and target_dir:
+
+    safe_folder = re.sub(
+        r"[^A-Za-z0-9_-]",
+        "_",
+        selected_folder.lower(),
+    )
+
+    prefix = (
+        "user_" + st.session_state["session_id"]
+        if is_custom_upload
+        else "shared"
+    )
+
+    active_collection_name = (
+        f"unrotten_{prefix}_{safe_folder}"
+    )[:63].strip("_")
+
+    pdf_path = (
+        target_dir
+        / "raw_10k.pdf"
+    )
+
+    txt_path = (
+        target_dir
+        / "raw_10k.txt"
+    )
+
+    if (
+        current_ticker
+        and current_cik
+        and not (
+            pdf_path.exists()
+            or txt_path.exists()
+        )
+    ):
+
+        with st.spinner(
+            f"Fetching {current_ticker} 10-K from SEC EDGAR..."
+        ):
+
+            fetch_sec_filing(
+                current_ticker,
+                current_cik,
+                target_dir,
+            )
+
+    doc_exists = (
+        pdf_path.exists()
+        or txt_path.exists()
+    )
+
+    if doc_exists:
+
+        collection = get_collection(
+            target_dir,
+            active_collection_name,
+        )
+
+
+# ============================================================
+# DEFAULT CHAT MODE — NO PDF REQUIRED
+# ============================================================
+
+if source_type == "Chat without a document":
+
+    chat_key = "general"
+
+    if chat_key not in st.session_state[
+        "chat_histories"
+    ]:
+
+        st.session_state[
+            "chat_histories"
+        ][
+            chat_key
+        ] = []
+
+    if chat_key not in st.session_state[
+        "conversation_states"
+    ]:
+
+        st.session_state[
+            "conversation_states"
+        ][
+            chat_key
+        ] = ""
+
+    st.markdown(
+        "### New conversation"
+    )
+
+    st.caption(
+        "General chat is the default. No PDF is required. "
+        "Ask about Unrotten, your project, coding, or anything else."
+    )
+
+    for message in st.session_state[
+        "chat_histories"
+    ][
+        chat_key
+    ]:
+
+        with st.chat_message(
+            message["role"]
+        ):
+
+            st.markdown(
+                message["content"]
+            )
+
+    user_input = st.chat_input(
+        "Ask anything…"
+    )
+
+    if user_input:
+
+        st.session_state[
+            "chat_histories"
+        ][
+            chat_key
+        ].append(
+            {
+                "role": "user",
+                "content": user_input,
+            }
+        )
+
+        with st.chat_message(
+            "user"
+        ):
+
+            st.markdown(
+                user_input
+            )
+
+        with st.chat_message(
+            "assistant"
+        ):
+
+            memory = get_conversation_state(
+                chat_key
+            ) or "[NO CONVERSATION STATE]"
+
+            recent = history_text(
+                st.session_state[
+                    "chat_histories"
+                ][
+                    chat_key
+                ][
+                    -MAX_RECENT_MESSAGES:
+                ][:-1]
+            )
+
+            if is_creator_question(user_input):
+
+                answer = CREATOR_NAME
+                api_error = None
+                api_error_text = None
+
+            else:
+
+                if is_project_question(
+                    user_input
+                ):
+
+                    system_prompt = PROJECT_SYSTEM_PROMPT
+
+                else:
+
+                    system_prompt = GENERAL_SYSTEM_PROMPT
+
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            system_prompt
+                            + "\n\nCONVERSATION STATE:\n"
+                            + memory
+                            + "\n\nRECENT CONVERSATION:\n"
+                            + recent
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": user_input,
+                    },
+                ]
+
+                answer = ""
+                api_error = None
+
+                try:
+                    completion = (
+                        client
+                        .chat
+                        .completions
+                        .create(
+                            model=GROQ_MODEL,
+                            messages=messages,
+                            temperature=0.2,
+                            max_completion_tokens=2048,
+                            stream=True,
+                        )
+                    )
+
+                    parts = []
+                    for chunk in completion:
+                        if not chunk.choices:
+                            continue
+                        content = (
+                            chunk.choices[0]
+                            .delta
+                            .content
+                        )
+                        if content:
+                            parts.append(content)
+
+                    answer = "".join(parts).strip()
+
+                    if not answer:
+                        answer = (
+                            "The model returned an empty response. "
+                            "Please try again."
+                        )
+
+                except Exception as exc:
+                    api_error = str(exc)
+
+                    if (
+                        "401" in api_error
+                        or "invalid_api_key" in api_error.lower()
+                    ):
+                        answer = (
+                            "Groq rejected the configured API key. "
+                            "Check `.streamlit/secrets.toml` and make "
+                            "sure `GROQ_API_KEY` contains a currently active key."
+                        )
+                    else:
+                        answer = (
+                            "The AI request failed. "
+                            "Please check the Groq configuration."
+                        )
+
+            st.markdown(
+                answer
+            )
+
+            if api_error:
+
+                with st.expander(
+                    "Technical error details",
+                    expanded=False,
+                ):
+
+                    st.text(
+                        api_error
+                    )
+
+            st.session_state[
+                "chat_histories"
+            ][
+                chat_key
+            ].append(
+                {
+                    "role": "assistant",
+                    "content": answer,
+                }
+            )
+
+            if not api_error:
+
+                update_memory(
+                    chat_key,
+                    user_input,
+                    answer,
+                )
+
+            persist_chats()
+
+    st.markdown(
+        '<div style="text-align:center; margin-top:32px; opacity:.55; font-size:.72rem;">Unrotten · General AI Workspace</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
+# DOCUMENT MODE
+# ============================================================
+
+else:
+
+    if not selected_folder or not target_dir:
+
+        st.markdown(
+            "### Select a document"
+        )
+
+        st.caption(
+            "Choose a pre-loaded SEC filing or upload a custom 10-K PDF."
+        )
+
+        if LOGO_PATH:
+
+            st.image(
+                str(LOGO_PATH),
+                width=105,
+            )
+
+        st.stop()
+
+
+    # --------------------------------------------------------
+    # ACTIVE FILING
+    # --------------------------------------------------------
+
+    st.markdown(
+        "### Active Filing"
+    )
+
+    status = (
+        f"● INDEX READY · {collection.count():,} chunks"
+        if collection
+        else "● DOCUMENT PENDING"
+    )
+
+    left, right = st.columns(
+        [4, 1],
+        vertical_alignment="center",
+    )
+
+    with left:
+
+        st.markdown(
+            f"**{selected_folder}**"
+        )
+
+        st.caption(
+            "SEC filing → evidence index → context-aware analysis"
+        )
+
+    with right:
+
+        st.write(
+            status
+        )
+
+
+    # --------------------------------------------------------
+    # CHAT STATE
+    # --------------------------------------------------------
+
+    if selected_folder not in st.session_state[
+        "chat_histories"
+    ]:
+
+        st.session_state[
+            "chat_histories"
+        ][
+            selected_folder
+        ] = []
+
+    if selected_folder not in st.session_state[
+        "conversation_states"
+    ]:
+
+        st.session_state[
+            "conversation_states"
+        ][
+            selected_folder
+        ] = ""
+
+
+    # --------------------------------------------------------
+    # QUICK WORKFLOWS
+    # --------------------------------------------------------
+
+    st.markdown(
+        "### Audit workflows"
+    )
+
+    q1, q2, q3 = st.columns(3)
+
+    preset_prompt = None
+
+    if q1.button(
+        "Debt maturity schedule",
+        use_container_width=True,
+    ):
+
+        preset_prompt = (
+            "What is the company's debt maturity schedule? "
+            "List each debt instrument, principal amount, "
+            "interest rate, and maturity date."
+        )
+
+    if q2.button(
+        "Revenue & segments",
+        use_container_width=True,
+    ):
+
+        preset_prompt = (
+            "What are total revenues and the business "
+            "segment breakdown for the most recent fiscal year? "
+            "Include exact amounts where available."
+        )
+
+    if q3.button(
+        "Headquarters & legal agent",
+        use_container_width=True,
+    ):
+
+        preset_prompt = (
+            "What is the principal executive office address "
+            "and registered agent or service-of-process information?"
+        )
+
+
+    # --------------------------------------------------------
+    # CONVERSATION
+    # --------------------------------------------------------
+
+    st.markdown(
+        "### Conversation"
+    )
+
+    st.caption(
+        "Project questions go directly to Unrotten knowledge. "
+        "SEC questions use follow-up resolution + ChromaDB."
+    )
+
+    chat_history = st.session_state[
+        "chat_histories"
+    ][
+        selected_folder
+    ]
+
+    for message in chat_history:
+
+        with st.chat_message(
+            message["role"]
+        ):
+
+            st.markdown(
+                message["content"]
+            )
+
+    user_input = st.chat_input(
+        "Ask about the filing or about the Unrotten project…",
+        disabled=not doc_exists,
+    )
+
+    prompt = (
+        preset_prompt
+        or user_input
+    )
+
+    if prompt:
+
+        chat_history.append(
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        )
+
+        with st.chat_message(
+            "user"
+        ):
+
+            st.markdown(
+                prompt
+            )
+
+        with st.chat_message(
+            "assistant"
+        ):
+
+            # ------------------------------------------------
+            # ROUTE
+            # ------------------------------------------------
+
+            creator_question = is_creator_question(prompt)
+            project_question = is_project_question(prompt)
+
+            if creator_question:
+
+                resolved_query = ""
+                evidence = ""
+                answer = CREATOR_NAME
+                api_error = None
+
+            elif project_question:
+
+                resolved_query = prompt
+                evidence = ""
+                answer = None
+                api_error = None
+
+            else:
+
+                resolved_query = resolve_query(
+                    selected_folder,
+                    prompt,
+                )
+
+                evidence = (
+                    retrieve(
+                        active_collection_name,
+                        resolved_query,
+                    )
+                    if collection
+                    else ""
+                )
+
+                answer = None
+                api_error = None
+
+
+            # ------------------------------------------------
+            # SOURCE EVIDENCE
+            # ------------------------------------------------
+
+            if not project_question and not creator_question:
+
+                with st.expander(
+                    "Source Evidence",
+                    expanded=False,
+                ):
+
+                    st.caption(
+                        "SEC filing excerpts retrieved for this response."
+                    )
+
+                    st.write(
+                        f"Retrieval query: {resolved_query}"
+                    )
+
+                    if evidence:
+
+                        st.text_area(
+                            "Evidence",
+                            evidence[:9000],
+                            height=300,
+                            disabled=True,
+                            label_visibility="collapsed",
+                        )
+
+                    else:
+
+                        st.warning(
+                            "No relevant SEC evidence was retrieved."
+                        )
+
+
+            # ------------------------------------------------
+            # CONTEXT
+            # ------------------------------------------------
+
+            memory = (
+                get_conversation_state(
+                    selected_folder
+                )
+                or "[NO CONVERSATION STATE]"
+            )
+
+            recent = history_text(
+                chat_history[
+                    -MAX_RECENT_MESSAGES:
+                ][:-1]
+            )
+
+
+            # ------------------------------------------------
+            # SYSTEM PROMPT
+            # ------------------------------------------------
+
+            if project_question:
+
+                system_prompt = PROJECT_SYSTEM_PROMPT
+
+                mode_context = """
+CURRENT MODE:
+UNROTTEN PROJECT / APPLICATION
+
+Do not require SEC evidence.
+Answer directly about the application, project,
+architecture, assignment, outcomes, or intended impact.
+"""
+
+            else:
+
+                system_prompt = SEC_SYSTEM_PROMPT
+
+                mode_context = (
+                    "CURRENT MODE:\n"
+                    "SEC FILING ANALYSIS\n\n"
+                    "RETRIEVED SEC CONTEXT:\n"
+                    + (
+                        evidence
+                        if evidence
+                        else "[NO CONTEXT RETRIEVED]"
+                    )
+                )
+
+
+            # ------------------------------------------------
+            # MESSAGE STACK
+            # ------------------------------------------------
+
+            if not creator_question:
+
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            system_prompt
+                            + "\n\nCONVERSATION STATE:\n"
+                            + memory
+                            + "\n\nRECENT CONVERSATION:\n"
+                            + recent
+                            + "\n\n"
+                            + mode_context
+                            + "\n\nSTANDALONE RETRIEVAL QUERY:\n"
+                            + (
+                                resolved_query
+                                if not project_question
+                                else "[PROJECT QUESTION — NO SEC RETRIEVAL]"
+                            )
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ]
+
+                answer = ""
+                api_error = None
+
+                try:
+                    completion = (
+                        client
+                        .chat
+                        .completions
+                        .create(
+                            model=GROQ_MODEL,
+                            messages=messages,
+                            temperature=0.2,
+                            max_completion_tokens=2048,
+                            stream=True,
+                        )
+                    )
+
+                    parts = []
+
+                    for chunk in completion:
+
+                        if not chunk.choices:
+                            continue
+
+                        content = (
+                            chunk.choices[0]
+                            .delta
+                            .content
+                        )
+
+                        if content:
+                            parts.append(content)
+
+                    answer = "".join(parts).strip()
+
+                    if not answer:
+                        answer = (
+                            "The model returned an empty response. "
+                            "Please try again."
+                        )
+
+                except Exception as exc:
+
+                    api_error = str(exc)
+                    lowered = api_error.lower()
+
+                    if (
+                        "401" in api_error
+                        or "invalid_api_key" in lowered
+                    ):
+
+                        answer = (
+                            "Groq rejected the configured API key. "
+                            "Check `.streamlit/secrets.toml` and make "
+                            "sure `GROQ_API_KEY` contains a currently active key."
+                        )
+
+                    else:
+
+                        answer = (
+                            "The AI request failed. "
+                            "Please check the Groq configuration."
+                        )
+
+            # DISPLAY
+            # ------------------------------------------------
+
+            st.markdown(
+                answer
+            )
+
+            if api_error:
+
+                with st.expander(
+                    "Technical error details",
+                    expanded=False,
+                ):
+
+                    st.text(
+                        api_error
+                    )
+
+
+            # ------------------------------------------------
+            # SAVE
+            # ------------------------------------------------
+
+            chat_history.append(
+                {
+                    "role": "assistant",
+                    "content": answer,
+                }
+            )
+
+            if not api_error:
+
+                update_memory(
+                    selected_folder,
+                    prompt,
+                    answer,
+                )
+
+            persist_chats()
+
+    st.markdown(
+        '<div style="text-align:center; margin-top:32px; opacity:.55; font-size:.72rem;">Unrotten · SEC-grounded research workspace</div>',
+        unsafe_allow_html=True,
     )
